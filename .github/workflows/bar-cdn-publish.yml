@@ -1,5 +1,8 @@
-# Workflow for Beyond All Reason, it only motifies BAR infra that a new engine
+# Workflow for Beyond All Reason, it only notifies BAR infra that a new engine
 # release was published.
+#
+# NOTE: This workflow only runs on the upstream repository. Forks should use
+# the fork-windows-build.yml workflow instead.
 name: Publish Engine to BAR CDN
 on:
   release:
@@ -11,6 +14,8 @@ on:
         required: true
 jobs:
   push:
+    # Only run on the upstream repository - forks don't have BAR CDN access
+    if: github.repository == 'beyond-all-reason/RecoilEngine'
     runs-on: ubuntu-latest
     permissions:
       id-token: write

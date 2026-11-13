@@ -1,0 +1,187 @@
+# Fork-specific workflow for building Windows engine artifacts.
+# This workflow builds a Windows x64 engine and creates a GitHub Release
+# with a downloadable artifact that can be dropped into a BAR installation.
+#
+# Triggers:
+#   - Push to any branch matching 'dev/*' or 'cursor/*'
+#   - Manual workflow_dispatch
+#   - Creates a release with tag 'fork-build-{branch}-{sha}'
+#
+# This workflow is designed for forks and does NOT require upstream secrets.
+# It uses standard GitHub-hosted runners and the public GHCR docker images.
+
+name: Fork Windows Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      create-release:
+        description: 'Create a GitHub release with the artifact'
+        type: boolean
+        default: true
+  push:
+    branches:
+      - 'dev/**'
+      - 'cursor/**'
+    paths-ignore:
+      - 'doc/**'
+      - '*.md'
+
+env:
+  # Docker image from upstream GHCR (public, no auth needed)
+  BUILD_IMAGE: ghcr.io/beyond-all-reason/recoil-build-amd64-windows:latest
+
+jobs:
+  build-windows:
+    name: Build Windows x64 Engine
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact-name: ${{ steps.version.outputs.artifact-name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Fetch upstream tags for version detection
+        run: |
+          # The version system uses git describe with version tags (e.g., 105.0.1)
+          # Forks don't have these tags by default, so we fetch them from upstream
+          # Use --no-recurse-submodules to avoid submodule ref errors
+          git remote add upstream https://github.com/beyond-all-reason/RecoilEngine.git || true
+          git fetch upstream --tags --force --no-recurse-submodules
+          echo "Latest tag: $(git describe --tags --abbrev=0 2>/dev/null || echo 'none')"
+
+      - name: Determine version string
+        id: version
+        run: |
+          VERSION=$(git describe --abbrev=7 2>/dev/null || echo "0.0.0-$(git rev-list --count HEAD)-g$(git rev-parse --short=7 HEAD)")
+          BRANCH=$(git rev-parse --abbrev-ref HEAD | sed 's/[^a-zA-Z0-9_.-]/-/g')
+          SHORT_SHA=$(git rev-parse --short=7 HEAD)
+          
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "short-sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "artifact-name=recoil_${VERSION}_amd64-windows" >> "$GITHUB_OUTPUT"
+          echo "release-tag=fork-build-${BRANCH}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          
+          echo "Version: $VERSION"
+          echo "Branch: $BRANCH"
+          echo "Short SHA: $SHORT_SHA"
+
+      - name: Pull builder image
+        run: |
+          docker pull $BUILD_IMAGE
+
+      - name: Build engine
+        run: |
+          mkdir -p artifacts build-output
+          
+          # Run the build in the container
+          # VERSION_ADDITIONAL adds a custom suffix visible in the engine version string
+          # This helps identify custom fork builds vs official releases
+          docker run --rm \
+            -v "$(pwd)":/build/src:ro \
+            -v "$(pwd)/build-output":/build/out:rw \
+            -v "$(pwd)/artifacts":/build/artifacts:rw \
+            -e ENGINE_PLATFORM=amd64-windows \
+            $BUILD_IMAGE \
+            bash -c '
+              set -e
+              # Fix git "dubious ownership" error for mounted volumes
+              git config --global --add safe.directory /build/src
+              git config --global --add safe.directory /build/src/tools/pr-downloader
+              
+              cd /build/src/docker-build-v2/scripts
+              ./configure.sh -DVERSION_ADDITIONAL=dunctem
+              ./compile.sh
+              ./split-debug-info.sh
+              ./package.sh
+            '
+
+      - name: List artifacts
+        run: |
+          echo "=== Build artifacts ==="
+          ls -la artifacts/
+          echo ""
+          echo "=== Install directory ==="
+          ls -la build-output/install/ || echo "Install dir not found"
+
+      - name: Upload engine artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.artifact-name }}
+          path: artifacts/*.7z
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.artifact-name }}-dbgsym
+          path: artifacts/*-dbgsym.tar.zst
+          compression-level: 0
+          if-no-files-found: ignore
+
+  create-release:
+    name: Create GitHub Release
+    needs: build-windows
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.create-release || github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release info
+        id: release-info
+        run: |
+          BRANCH=$(git rev-parse --abbrev-ref HEAD | sed 's/[^a-zA-Z0-9_.-]/-/g')
+          SHORT_SHA=$(git rev-parse --short=7 HEAD)
+          FULL_SHA=$(git rev-parse HEAD)
+          TAG="fork-build-${BRANCH}-${SHORT_SHA}"
+          
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "sha=$FULL_SHA" >> "$GITHUB_OUTPUT"
+          echo "short-sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-windows.outputs.artifact-name }}
+          path: release-artifacts
+
+      - name: List release artifacts
+        run: ls -la release-artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release-info.outputs.tag }}
+          name: "Fork Build: ${{ steps.release-info.outputs.branch }} @ ${{ steps.release-info.outputs.short-sha }}"
+          body: |
+            ## Fork Build
+            
+            **Branch:** `${{ steps.release-info.outputs.branch }}`
+            **Commit:** `${{ steps.release-info.outputs.sha }}`
+            **Version:** `${{ needs.build-windows.outputs.version }}`
+            
+            ### Installation
+            
+            1. Download the `.7z` file below
+            2. Extract to `C:\Program Files\Beyond-All-Reason\data\engine\recoil_${{ needs.build-windows.outputs.version }}_custom\`
+            3. See the repository's `docs-dev/FORK_GUIDE.md` for detailed instructions
+            
+            ### Files
+            
+            - `recoil_*_amd64-windows.7z` - Windows x64 engine build
+          files: release-artifacts/*.7z
+          draft: false
+          prerelease: true
+          make_latest: false
