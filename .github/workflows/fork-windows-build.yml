@@ -81,6 +81,10 @@ jobs:
             $BUILD_IMAGE \
             bash -c '
               set -e
+              # Fix git "dubious ownership" error for mounted volumes
+              git config --global --add safe.directory /build/src
+              git config --global --add safe.directory /build/src/tools/pr-downloader
+              
               cd /build/src/docker-build-v2/scripts
               ./configure.sh -DVERSION_ADDITIONAL=dunctem
               ./compile.sh
