@@ -49,8 +49,9 @@ jobs:
         run: |
           # The version system uses git describe with version tags (e.g., 105.0.1)
           # Forks don't have these tags by default, so we fetch them from upstream
+          # Use --no-recurse-submodules to avoid submodule ref errors
           git remote add upstream https://github.com/beyond-all-reason/RecoilEngine.git || true
-          git fetch upstream --tags --force
+          git fetch upstream --tags --force --no-recurse-submodules
           echo "Latest tag: $(git describe --tags --abbrev=0 2>/dev/null || echo 'none')"
 
       - name: Determine version string
