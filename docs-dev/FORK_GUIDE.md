@@ -139,87 +139,28 @@ C:\Program Files\Beyond-All-Reason\data\engine\
 
 ### Automated Deployment (PowerShell)
 
-Save this as `deploy-engine.ps1`:
+The repository includes a deploy script at `tools/scripts/deploy-engine-windows.ps1`.
+It automatically downloads a portable 7-Zip extractor if needed (no installation required).
 
+**Quick start:**
 ```powershell
-# Deploy latest fork engine build to BAR
-# Usage: .\deploy-engine.ps1 [-EngineFolder "recoil_custom"]
+# Download the script and run it
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/dunctem/RecoilEngine/master/tools/scripts/deploy-engine-windows.ps1" -OutFile deploy-engine.ps1
+.\deploy-engine.ps1
 
-param(
-    [string]$RepoOwner = "dunctem",
-    [string]$RepoName = "RecoilEngine",
-    [string]$EngineFolder = "recoil_dunctem_dev",
-    [string]$BarPath = "C:\Program Files\Beyond-All-Reason"
-)
+# Or with custom folder name
+.\deploy-engine.ps1 -EngineFolder "recoil_test"
 
-$ErrorActionPreference = "Stop"
-
-# Find latest release
-$releasesUrl = "https://api.github.com/repos/$RepoOwner/$RepoName/releases"
-Write-Host "Fetching releases from $releasesUrl..."
-
-$releases = Invoke-RestMethod -Uri $releasesUrl -Headers @{
-    "Accept" = "application/vnd.github.v3+json"
-    "User-Agent" = "PowerShell"
-}
-
-# Find first release with a windows .7z asset
-$release = $null
-$asset = $null
-foreach ($r in $releases) {
-    $a = $r.assets | Where-Object { $_.name -match "amd64-windows.*\.7z$" -and $_.name -notmatch "dbgsym" }
-    if ($a) {
-        $release = $r
-        $asset = $a | Select-Object -First 1
-        break
-    }
-}
-
-if (-not $asset) {
-    Write-Error "No Windows engine release found"
-    exit 1
-}
-
-Write-Host "Found release: $($release.tag_name)"
-Write-Host "Asset: $($asset.name)"
-
-# Download
-$downloadPath = Join-Path $env:TEMP $asset.name
-Write-Host "Downloading to $downloadPath..."
-Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $downloadPath
-
-# Extract
-$enginePath = Join-Path $BarPath "data\engine\$EngineFolder"
-Write-Host "Extracting to $enginePath..."
-
-if (Test-Path $enginePath) {
-    Write-Host "Removing existing folder..."
-    Remove-Item -Recurse -Force $enginePath
-}
-
-New-Item -ItemType Directory -Path $enginePath -Force | Out-Null
-
-# Use 7-Zip if available, otherwise fall back to Expand-Archive for .zip
-$7zPath = "C:\Program Files\7-Zip\7z.exe"
-if (Test-Path $7zPath) {
-    & $7zPath x $downloadPath -o"$enginePath" -y
-} else {
-    Write-Host "7-Zip not found. Please install 7-Zip or extract manually."
-    Write-Host "Download: $downloadPath"
-    Write-Host "Extract to: $enginePath"
-    exit 1
-}
-
-# Cleanup
-Remove-Item $downloadPath
-
-Write-Host ""
-Write-Host "Engine deployed successfully to: $enginePath"
-Write-Host ""
-Write-Host "To use this engine:"
-Write-Host "  1. Use BAR Debug Launcher (https://github.com/beyond-all-reason/bar_debug_launcher)"
-Write-Host "  2. Or run spring.exe directly (see below)"
+# Or specific release
+.\deploy-engine.ps1 -ReleaseTag "fork-build-cursor-fork-setup-workflow-388c-214c038"
 ```
+
+**What it does:**
+1. Finds/downloads portable 7zr.exe if 7-Zip isn't installed
+2. Fetches the latest release from the fork
+3. Downloads the Windows `.7z` artifact
+4. Extracts to the BAR engine directory
+5. Verifies spring.exe exists
 
 ### Running Your Custom Engine
 

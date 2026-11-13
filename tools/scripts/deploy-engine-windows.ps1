@@ -4,7 +4,8 @@
 
 .DESCRIPTION
     Downloads the latest Windows engine release from a GitHub fork and extracts
-    it to the BAR engine directory. Requires 7-Zip to be installed.
+    it to the BAR engine directory. Automatically downloads a portable 7-Zip
+    extractor if 7-Zip is not installed.
 
 .PARAMETER RepoOwner
     GitHub username/org that owns the fork. Default: dunctem
@@ -32,7 +33,7 @@
     Downloads a specific release to a custom folder.
 
 .NOTES
-    Requires 7-Zip installed at C:\Program Files\7-Zip\7z.exe
+    No prerequisites required - downloads portable 7zr.exe if needed.
     Run from an elevated PowerShell if BAR is in Program Files.
 #>
 
@@ -61,13 +62,59 @@ function Write-Failure {
     Write-Host "[-] $Message" -ForegroundColor Red
 }
 
-# Check for 7-Zip
-$7zPath = "C:\Program Files\7-Zip\7z.exe"
-if (-not (Test-Path $7zPath)) {
-    Write-Failure "7-Zip not found at $7zPath"
-    Write-Host "Please install 7-Zip from https://www.7-zip.org/"
+# Find or download 7-Zip
+function Get-7ZipPath {
+    # Check common installation paths
+    $paths = @(
+        "C:\Program Files\7-Zip\7z.exe",
+        "C:\Program Files (x86)\7-Zip\7z.exe",
+        "$env:LOCALAPPDATA\7-Zip\7z.exe"
+    )
+    
+    foreach ($p in $paths) {
+        if (Test-Path $p) {
+            return $p
+        }
+    }
+    
+    # Check if portable 7zr is already downloaded
+    $portable7zr = Join-Path $env:TEMP "7zr.exe"
+    if (Test-Path $portable7zr) {
+        return $portable7zr
+    }
+    
+    # Download portable 7zr.exe (standalone command-line extractor)
+    Write-Status "7-Zip not found, downloading portable 7zr.exe..."
+    
+    # 7zr.exe is a standalone console version that can extract .7z files
+    # It's a single ~600KB executable with no dependencies
+    $7zrUrl = "https://www.7-zip.org/a/7zr.exe"
+    
+    try {
+        $progressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $7zrUrl -OutFile $portable7zr -UseBasicParsing
+        $progressPreference = 'Continue'
+        
+        if (Test-Path $portable7zr) {
+            Write-Success "Downloaded portable 7zr.exe"
+            return $portable7zr
+        }
+    } catch {
+        Write-Failure "Failed to download 7zr.exe: $_"
+    }
+    
+    return $null
+}
+
+# Get 7-Zip path
+$7zPath = Get-7ZipPath
+if (-not $7zPath) {
+    Write-Failure "Could not find or download 7-Zip"
+    Write-Host "Please install 7-Zip from https://www.7-zip.org/ or ensure internet access"
     exit 1
 }
+
+Write-Status "Using 7-Zip: $7zPath"
 
 # Check BAR path
 if (-not (Test-Path $BarPath)) {
@@ -135,8 +182,8 @@ Write-Host "  Published: $($release.published_at)"
 $downloadPath = Join-Path $env:TEMP $asset.name
 Write-Status "Downloading $($asset.name)..."
 
-$progressPreference = 'SilentlyContinue'  # Speed up download
-Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $downloadPath
+$progressPreference = 'SilentlyContinue'
+Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $downloadPath -UseBasicParsing
 $progressPreference = 'Continue'
 
 if (-not (Test-Path $downloadPath)) {
@@ -176,7 +223,7 @@ if (-not (Test-Path $springExe)) {
     exit 1
 }
 
-# Cleanup
+# Cleanup archive (keep portable 7zr for future use)
 Remove-Item $downloadPath -Force
 
 # Print summary
